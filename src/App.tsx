@@ -1,4 +1,11 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
+import Prism from 'prismjs';
+import 'prismjs/components/prism-python';
+import 'prismjs/components/prism-javascript';
+import 'prismjs/components/prism-typescript';
+import 'prismjs/components/prism-java';
+import 'prismjs/components/prism-c';
+import 'prismjs/components/prism-cpp';
 import { 
   Bug, 
   Code2, 
@@ -17,10 +24,12 @@ import {
   X,
   FileCode,
   Sparkles,
-  Zap
+  Zap,
+  Globe
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import Markdown from 'react-markdown';
+import { DebugScene } from './components/DebugScene';
 import { debugCode, type DebugResult } from './services/gemini';
 import { getCodeCompletion, getAutoCorrection } from './lib/aiService';
 
@@ -66,11 +75,14 @@ export default function App() {
   const [isSuggesting, setIsSuggesting] = useState(false);
   const [quotaExceededUntil, setQuotaExceededUntil] = useState<number>(0);
   const [isCorrecting, setIsCorrecting] = useState(false);
+  const [autoCorrectEnabled, setAutoCorrectEnabled] = useState(true);
+  const [scrollTop, setScrollTop] = useState(0);
   
   const resultRef = useRef<HTMLDivElement>(null);
   const editInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const suggestionTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const debugTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const lastRequestCodeRef = useRef<string>('');
   const suggestionCacheRef = useRef<Record<string, string>>({});
 
@@ -193,6 +205,23 @@ export default function App() {
   }, [activeTab.result?.detectedLanguage, quotaExceededUntil]);
 
   useEffect(() => {
+    if (debugTimeoutRef.current) {
+      clearTimeout(debugTimeoutRef.current);
+    }
+
+    const trimmedCode = activeTab.code.trim();
+    if (trimmedCode) {
+      debugTimeoutRef.current = setTimeout(() => {
+        handleBackgroundDebug(activeTab.code);
+      }, 1500); // 1.5s debounce for background debugging
+    }
+
+    return () => {
+      if (debugTimeoutRef.current) clearTimeout(debugTimeoutRef.current);
+    };
+  }, [activeTab.code]);
+
+  useEffect(() => {
     if (suggestionTimeoutRef.current) {
       clearTimeout(suggestionTimeoutRef.current);
     }
@@ -201,7 +230,7 @@ export default function App() {
     if (trimmedCode && trimmedCode !== lastRequestCodeRef.current) {
       suggestionTimeoutRef.current = setTimeout(() => {
         fetchSuggestion(activeTab.code);
-      }, 2500); // Increased debounce to 2.5 seconds to save quota
+      }, 600); // Reduced debounce to 600ms for faster response
     } else if (!trimmedCode) {
       setSuggestion('');
       lastRequestCodeRef.current = '';
@@ -227,6 +256,47 @@ export default function App() {
     }
   };
 
+  const detectLanguage = (code: string) => {
+    const trimmed = code.trim();
+    if (trimmed.startsWith('import ') || trimmed.startsWith('const ') || trimmed.startsWith('function ')) return 'javascript';
+    if (trimmed.startsWith('def ') || trimmed.startsWith('import ') && trimmed.includes('from ')) return 'python';
+    if (trimmed.startsWith('#include ')) return 'cpp';
+    if (trimmed.startsWith('public class ') || trimmed.startsWith('import java.')) return 'java';
+    return 'javascript'; // Default
+  };
+
+  const handleBackgroundDebug = async (code: string) => {
+    if (!code.trim()) return;
+    
+    // Optimistic language detection
+    const detected = detectLanguage(code);
+    updateActiveTab({ result: { detectedLanguage: detected, errors: [], errorLines: [], explanation: "", suggestedFix: "", expectedOutput: "", learningMoment: "", codeBreakdown: [], verifiedResources: [] } });
+    
+    try {
+      const debugResult = await debugCode(code, () => {});
+      updateActiveTab({ result: debugResult });
+
+      // Auto-correct logic: Only apply if 1-2 simple syntax errors AND enabled
+      if (autoCorrectEnabled && debugResult.errors.length > 0 && debugResult.errors.length <= 2) {
+        const isSimpleError = debugResult.errors.every(err => 
+          err.type.toLowerCase().includes('syntax') || 
+          err.description.toLowerCase().includes('missing')
+        );
+        
+        if (isSimpleError) {
+          // Apply fix
+          updateActiveTab({ code: debugResult.suggestedFix });
+          // Notify user
+          setError("Auto-corrected simple syntax error.");
+          setTimeout(() => setError(null), 3000);
+        }
+      }
+    } catch (err) {
+      // Silent error handling for background debug
+      console.error("Background debug failed", err);
+    }
+  };
+
   const handleDebug = async () => {
     if (!activeTab.code.trim()) return;
     
@@ -234,7 +304,10 @@ export default function App() {
     setError(null);
     
     try {
-      const debugResult = await debugCode(activeTab.code);
+      const debugResult = await debugCode(activeTab.code, (chunk) => {
+        // Optional: Handle partial streaming updates if needed
+        console.log("Chunk received:", chunk);
+      });
       updateActiveTab({ result: debugResult });
       setShowConsole(false);
       // Scroll to result immediately
@@ -267,35 +340,35 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 selection:bg-indigo-100">
+    <div className="min-h-screen bg-zinc-950 text-zinc-100 selection:bg-indigo-900">
       {/* Header */}
-      <header className="bg-white border-b border-slate-200 sticky top-0 z-30">
+      <header className="bg-zinc-900 border-b border-zinc-800 sticky top-0 z-30">
         <div className="max-w-[1600px] mx-auto px-4 h-16 flex items-center justify-between">
           <div className="flex items-center gap-4">
             <button 
               onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-              className="p-2 hover:bg-slate-100 rounded-lg transition-colors lg:hidden"
+              className="p-2 hover:bg-zinc-800 rounded-lg transition-colors lg:hidden"
             >
-              <Terminal size={20} className="text-slate-600" />
+              <Terminal size={20} className="text-zinc-400" />
             </button>
             <div className="flex items-center gap-2">
-              <div className="w-9 h-9 bg-indigo-600 rounded-xl flex items-center justify-center text-white shadow-lg shadow-indigo-200">
+              <div className="w-9 h-9 bg-indigo-600 rounded-xl flex items-center justify-center text-white shadow-lg shadow-indigo-900/20">
                 <Bug size={20} />
               </div>
               <div>
-                <h1 className="text-lg font-bold tracking-tight text-slate-900">Master the Error</h1>
-                <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Learning Assistant</p>
+                <h1 className="text-lg font-bold tracking-tight text-white">NeonDebug AI</h1>
+                <p className="text-[10px] text-zinc-400 font-bold uppercase tracking-wider">3D Interactive Debugger</p>
               </div>
             </div>
           </div>
           
-          <div className="hidden sm:flex items-center gap-6 text-sm font-medium text-slate-600">
-            <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-100 rounded-full text-xs font-bold text-slate-500">
+          <div className="hidden sm:flex items-center gap-6 text-sm font-medium text-zinc-400">
+            <div className="flex items-center gap-2 px-3 py-1.5 bg-zinc-800 rounded-full text-xs font-bold text-indigo-400 border border-indigo-900/50">
               <Monitor size={14} />
               <span>v2.0 Multi-Tab</span>
             </div>
-            <a href="#" className="hover:text-indigo-600 transition-colors">Docs</a>
-            <button className="bg-slate-900 text-white px-4 py-2 rounded-lg hover:bg-slate-800 transition-all text-xs font-bold">
+            <a href="#" className="hover:text-indigo-400 transition-colors">Docs</a>
+            <button className="bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition-all text-xs font-bold shadow-[0_0_10px_rgba(79,70,229,0.3)]">
               Sign In
             </button>
           </div>
@@ -307,22 +380,22 @@ export default function App() {
         <aside 
           className={`
             ${isSidebarOpen ? 'w-72' : 'w-0 lg:w-20'} 
-            bg-white border-r border-slate-200 flex flex-col shrink-0 transition-all duration-300 overflow-hidden z-20 relative
+            bg-zinc-900 border-r border-zinc-800 flex flex-col shrink-0 transition-all duration-300 overflow-hidden z-20 relative
           `}
         >
-          <div className="p-4 flex items-center justify-between border-b border-slate-100 bg-slate-50/50">
-            <h2 className={`font-bold text-slate-700 text-[10px] uppercase tracking-widest ${!isSidebarOpen && 'hidden'}`}>My Snippets</h2>
+          <div className="p-4 flex items-center justify-between border-b border-zinc-800 bg-zinc-950/50">
+            <h2 className={`font-bold text-zinc-400 text-[10px] uppercase tracking-widest ${!isSidebarOpen && 'hidden'}`}>My Snippets</h2>
             <div className="flex items-center gap-1">
               <button 
                 onClick={addTab}
-                className="p-1.5 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-all shadow-md shadow-indigo-100"
+                className="p-1.5 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-all shadow-[0_0_10px_rgba(79,70,229,0.5)]"
                 title="New Snippet"
               >
                 <Plus size={16} />
               </button>
               <button 
                 onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-                className="hidden lg:flex p-1.5 hover:bg-slate-200 rounded-lg text-slate-400 transition-colors"
+                className="hidden lg:flex p-1.5 hover:bg-zinc-800 rounded-lg text-zinc-500 transition-colors"
               >
                 <Terminal size={16} />
               </button>
@@ -338,11 +411,11 @@ export default function App() {
                   group relative flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold transition-all cursor-pointer border
                   ${activeTabId === tab.id 
                     ? 'bg-indigo-50 text-indigo-700 border-indigo-200 shadow-sm' 
-                    : 'bg-transparent text-slate-500 border-transparent hover:bg-slate-50 hover:text-slate-700'}
+                    : 'bg-transparent text-zinc-500 border-transparent hover:bg-zinc-50 hover:text-zinc-700'}
                   ${!isSidebarOpen && 'justify-center px-0'}
                 `}
               >
-                <FileCode size={20} className={activeTabId === tab.id ? 'text-indigo-600' : 'text-slate-400'} />
+                <FileCode size={20} className={activeTabId === tab.id ? 'text-indigo-600' : 'text-zinc-400'} />
                 
                 {isSidebarOpen && (
                   <>
@@ -373,7 +446,7 @@ export default function App() {
                       {tabs.length > 1 && (
                         <button 
                           onClick={(e) => closeTab(e, tab.id)}
-                          className="p-1 hover:bg-red-100 rounded text-slate-400 hover:text-red-500"
+                          className="p-1 hover:bg-red-100 rounded text-zinc-400 hover:text-red-500"
                         >
                           <X size={12} />
                         </button>
@@ -386,25 +459,34 @@ export default function App() {
           </div>
 
           {isSidebarOpen && (
-            <div className="p-4 border-t border-slate-100">
+            <div className="p-4 border-t border-zinc-100">
               <div className="bg-indigo-50 rounded-xl p-3">
                 <p className="text-[10px] font-bold text-indigo-600 uppercase mb-1">Pro Tip</p>
                 <p className="text-[10px] text-indigo-700 leading-tight">Double-click a snippet name to rename it for better tracking.</p>
+              </div>
+              <div className="mt-4 flex items-center justify-between">
+                <span className="text-[10px] font-bold text-zinc-500 uppercase">Auto-Correct</span>
+                <button
+                  onClick={() => setAutoCorrectEnabled(!autoCorrectEnabled)}
+                  className={`w-8 h-4 rounded-full transition-colors ${autoCorrectEnabled ? 'bg-indigo-600' : 'bg-zinc-300'}`}
+                >
+                  <div className={`w-3 h-3 bg-white rounded-full transition-transform ${autoCorrectEnabled ? 'translate-x-4' : 'translate-x-1'}`} />
+                </button>
               </div>
             </div>
           )}
         </aside>
 
         {/* Main Content Area */}
-        <main className="flex-1 overflow-y-auto bg-slate-50/30">
+        <main className="flex-1 overflow-y-auto bg-zinc-50/30">
           <div className="max-w-6xl mx-auto px-4 py-8 md:py-10">
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
           
           {/* Left Column: Input */}
           <div className="lg:col-span-7 space-y-6">
-            <section className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-              <div className="p-4 border-b border-slate-100 bg-slate-50/50 flex items-center justify-between">
-                <div className="flex items-center gap-2 text-slate-700 font-semibold">
+            <section className="bg-white rounded-2xl border border-zinc-200 shadow-sm overflow-hidden">
+              <div className="p-4 border-b border-zinc-100 bg-zinc-50/50 flex items-center justify-between">
+                <div className="flex items-center gap-2 text-zinc-700 font-semibold">
                   <Code2 size={18} className="text-indigo-600" />
                   <span>Code Editor</span>
                 </div>
@@ -428,7 +510,7 @@ export default function App() {
                   <button 
                     onClick={() => copyToClipboard(activeTab.code, 'original')}
                     disabled={!activeTab.code.trim()}
-                    className="flex items-center gap-2 text-xs font-bold text-slate-500 hover:text-indigo-600 transition-colors"
+                    className="flex items-center gap-2 text-xs font-bold text-zinc-500 hover:text-indigo-600 transition-colors"
                   >
                     {copiedOriginal ? <CheckCircle2 size={14} className="text-emerald-500" /> : <Copy size={14} />}
                     {copiedOriginal ? 'Copied!' : 'Copy'}
@@ -438,7 +520,7 @@ export default function App() {
               
               <div className="relative font-mono text-sm flex">
                 {/* Line Numbers */}
-                <div className="bg-slate-50 border-r border-slate-100 p-6 pr-3 text-right text-slate-300 select-none sticky top-0 h-[400px] overflow-hidden">
+                <div className="bg-zinc-50 border-r border-zinc-100 p-6 pr-3 text-right text-zinc-300 select-none sticky top-0 h-[400px] overflow-hidden">
                   {activeTab.code.split('\n').map((_, idx) => (
                     <div key={idx} className="h-[1.5rem] leading-[1.5rem]">
                       {idx + 1}
@@ -450,19 +532,30 @@ export default function App() {
                 <div className="relative flex-1 h-[400px]">
                   {/* Highlight Layer (Behind Textarea) */}
                   <div 
-                    className="absolute inset-0 p-6 pointer-events-none overflow-hidden whitespace-pre break-all text-transparent"
+                    className="absolute inset-0 p-6 pointer-events-none overflow-hidden whitespace-pre break-all text-zinc-900"
                     aria-hidden="true"
                     style={{ lineHeight: '1.5rem' }}
                   >
                     {activeTab.code.split('\n').map((line, idx) => {
+                      // Virtualization: only render visible lines
+                      if (idx < Math.max(0, scrollTop / 24 - 10) || idx > scrollTop / 24 + 40) {
+                        return <div key={idx} className="h-[1.5rem]" />;
+                      }
+                      
                       const isErrorLine = activeTab.result?.errorLines.includes(idx + 1);
+                      const language = activeTab.result?.detectedLanguage?.toLowerCase() || 'javascript';
+                      let highlightedLine = '';
+                      try {
+                        highlightedLine = Prism.highlight(line || ' ', Prism.languages[language] || Prism.languages.javascript, language);
+                      } catch (e) {
+                        highlightedLine = Prism.highlight(line || ' ', Prism.languages.javascript, 'javascript');
+                      }
                       return (
                         <div 
                           key={idx} 
                           className={`h-[1.5rem] ${isErrorLine ? 'bg-red-500/20 border-l-4 border-red-500 -ml-6 pl-[1.25rem]' : ''}`}
-                        >
-                          {line || ' '}
-                        </div>
+                          dangerouslySetInnerHTML={{ __html: highlightedLine }}
+                        />
                       );
                     })}
                   </div>
@@ -478,11 +571,12 @@ export default function App() {
                     }}
                     onKeyDown={handleEditorKeyDown}
                     placeholder="Paste your code here... I'll detect the language automatically!"
-                    className="w-full h-full p-6 bg-transparent focus:outline-none resize-none placeholder:text-slate-300 relative z-10 caret-slate-900 whitespace-pre overflow-auto"
+                    className="w-full h-full p-6 bg-transparent focus:outline-none resize-none placeholder:text-zinc-300 relative z-10 caret-zinc-900 whitespace-pre overflow-auto text-transparent"
                     style={{ lineHeight: '1.5rem' }}
                     spellCheck={false}
                     onScroll={(e) => {
                       const target = e.target as HTMLTextAreaElement;
+                      setScrollTop(target.scrollTop);
                       const highlightLayer = target.previousElementSibling as HTMLDivElement;
                       const lineNumbers = target.parentElement?.previousElementSibling as HTMLDivElement;
                       if (highlightLayer) highlightLayer.scrollTop = target.scrollTop;
@@ -497,7 +591,7 @@ export default function App() {
                       style={{ lineHeight: '1.5rem' }}
                     >
                       <span>{activeTab.code}</span>
-                      <span className="text-slate-300 bg-indigo-50/50 rounded">{suggestion}</span>
+                      <span className="text-zinc-300 bg-indigo-50/50 rounded">{suggestion}</span>
                       <div className="inline-flex items-center gap-1 ml-2 px-1.5 py-0.5 bg-indigo-600 text-white text-[10px] font-bold rounded animate-pulse">
                         <Sparkles size={10} />
                         <span>Tab to accept</span>
@@ -509,7 +603,6 @@ export default function App() {
                     <div className="absolute top-4 right-4 z-30">
                       <div className="flex items-center gap-2 px-2 py-1 bg-white/80 backdrop-blur-sm border border-indigo-100 rounded-lg text-[10px] font-bold text-indigo-600 shadow-sm">
                         <Loader2 size={10} className="animate-spin" />
-                        <span>AI Thinking...</span>
                       </div>
                     </div>
                   )}
@@ -519,7 +612,7 @@ export default function App() {
                   {activeTab.code.trim() && (
                     <button 
                       onClick={() => copyToClipboard(activeTab.code, 'original')}
-                      className="flex items-center gap-2 px-4 py-3 bg-white/80 backdrop-blur-sm text-slate-600 hover:text-indigo-600 rounded-xl font-bold transition-all border border-slate-200 shadow-sm"
+                      className="flex items-center gap-2 px-4 py-3 bg-white/80 backdrop-blur-sm text-zinc-600 hover:text-indigo-600 rounded-xl font-bold transition-all border border-zinc-200 shadow-sm"
                       title="Copy Original Code"
                     >
                       {copiedOriginal ? <CheckCircle2 size={20} className="text-emerald-500" /> : <Copy size={20} />}
@@ -546,7 +639,7 @@ export default function App() {
                     className={`
                       flex items-center gap-2 px-6 py-3 rounded-xl font-bold transition-all shadow-lg
                       ${isDebugging || !activeTab.code.trim() 
-                        ? 'bg-slate-200 text-slate-400 cursor-not-allowed shadow-none' 
+                        ? 'bg-zinc-200 text-zinc-400 cursor-not-allowed shadow-none' 
                         : 'bg-indigo-600 text-white hover:bg-indigo-700 hover:-translate-y-0.5 active:translate-y-0 shadow-indigo-200'}
                     `}
                   >
@@ -592,20 +685,20 @@ export default function App() {
                   <div className="w-16 h-16 bg-white rounded-full flex items-center justify-center mx-auto shadow-sm">
                     <Lightbulb className="text-indigo-600" size={32} />
                   </div>
-                  <h3 className="text-lg font-bold text-slate-900">Ready to resolve!</h3>
-                  <p className="text-slate-600 text-sm leading-relaxed">
+                  <h3 className="text-lg font-bold text-zinc-900">Ready to resolve!</h3>
+                  <p className="text-zinc-600 text-sm leading-relaxed">
                     Paste your code on the left. I'll automatically detect the language, find errors, and provide a full resolution.
                   </p>
                   <div className="pt-4 grid grid-cols-2 gap-3">
                     <div className="bg-white p-3 rounded-xl border border-indigo-100 text-left">
                       <div className="text-indigo-600 mb-1"><Languages size={16} /></div>
-                      <p className="text-xs font-bold text-slate-800">Auto-Detect</p>
-                      <p className="text-[10px] text-slate-500">Detects 20+ languages</p>
+                      <p className="text-xs font-bold text-zinc-800">Auto-Detect</p>
+                      <p className="text-[10px] text-zinc-500">Detects 20+ languages</p>
                     </div>
                     <div className="bg-white p-3 rounded-xl border border-indigo-100 text-left">
                       <div className="text-indigo-600 mb-1"><CheckCircle2 size={16} /></div>
-                      <p className="text-xs font-bold text-slate-800">Full Resolve</p>
-                      <p className="text-[10px] text-slate-500">Working code snippets</p>
+                      <p className="text-xs font-bold text-zinc-800">Full Resolve</p>
+                      <p className="text-[10px] text-zinc-500">Working code snippets</p>
                     </div>
                   </div>
                 </motion.div>
@@ -615,30 +708,12 @@ export default function App() {
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
                   exit={{ opacity: 0 }}
-                  className="bg-white border border-slate-200 rounded-2xl p-8 text-center space-y-6"
+                  className="h-[400px] flex flex-col items-center justify-center bg-black border border-indigo-500/50 rounded-2xl p-8 text-center space-y-6"
                 >
-                  <div className="relative w-20 h-20 mx-auto">
-                    <div className="absolute inset-0 border-4 border-indigo-100 rounded-full"></div>
-                    <div className="absolute inset-0 border-4 border-indigo-600 rounded-full border-t-transparent animate-spin"></div>
-                    <div className="absolute inset-0 flex items-center justify-center">
-                      <Terminal className="text-indigo-600" size={24} />
-                    </div>
-                  </div>
-                  <div>
-                    <h3 className="text-lg font-bold text-slate-900">Processing...</h3>
-                    <p className="text-slate-500 text-sm mt-1">Detecting language and resolving logic errors.</p>
-                  </div>
-                  <div className="space-y-2">
-                    {[1, 2, 3].map(i => (
-                      <div key={i} className="h-2 bg-slate-100 rounded-full overflow-hidden">
-                        <motion.div 
-                          className="h-full bg-indigo-400"
-                          initial={{ x: '-100%' }}
-                          animate={{ x: '100%' }}
-                          transition={{ duration: 1.5, repeat: Infinity, delay: i * 0.2 }}
-                        />
-                      </div>
-                    ))}
+                  <DebugScene errors={[]} />
+                  <div className="absolute z-10 bg-black/80 backdrop-blur p-4 rounded-xl border border-indigo-500">
+                    <h3 className="text-lg font-bold text-indigo-400">Processing...</h3>
+                    <p className="text-zinc-400 text-sm mt-1">Detecting language and resolving logic errors.</p>
                   </div>
                 </motion.div>
               ) : (
@@ -649,6 +724,11 @@ export default function App() {
                   animate={{ opacity: 1, x: 0 }}
                   className="space-y-6"
                 >
+                  {/* 3D Visualization of Errors */}
+                  {activeTab.result && activeTab.result.errors.length > 0 && (
+                    <DebugScene errors={activeTab.result.errors} />
+                  )}
+
                   {/* Error Summary */}
                   <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
                     {activeTab.result?.errors.length === 0 ? (
@@ -667,19 +747,46 @@ export default function App() {
                           <AlertCircle size={18} />
                           <span>Issues Detected</span>
                         </div>
-                        <div className="p-5 space-y-3">
-                          {activeTab.result?.errors.map((err, idx) => (
-                            <div key={idx} className="flex gap-3 text-sm">
-                              <span className="w-5 h-5 bg-red-100 text-red-600 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0 mt-0.5">
-                                {idx + 1}
-                              </span>
-                              <p className="text-slate-700 font-medium">{err}</p>
+                        <div className="p-5 space-y-4">
+                          {activeTab.result?.errors?.map((err, idx) => (
+                            <div key={idx} className="bg-white p-4 rounded-xl border border-red-100 shadow-sm space-y-2">
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="text-xs font-bold text-red-600 bg-red-50 px-2 py-1 rounded">Line {err.line}</span>
+                                <span className="text-xs font-bold text-zinc-500 uppercase tracking-wider">{err.type}</span>
+                              </div>
+                              <p className="text-sm text-zinc-800 font-medium">{err.description}</p>
+                              <div className="text-xs text-indigo-600 bg-indigo-50 p-2 rounded font-mono">
+                                <span className="font-bold uppercase">Fix:</span> {err.suggestion}
+                              </div>
                             </div>
                           ))}
                         </div>
                       </>
                     )}
                   </div>
+
+                  {/* Verified Resources */}
+                  {activeTab.result?.verifiedResources && activeTab.result.verifiedResources.length > 0 && (
+                    <div className="bg-white border border-indigo-100 rounded-2xl p-5 shadow-sm">
+                      <div className="flex items-center gap-2 text-indigo-700 font-bold mb-3">
+                        <Globe size={18} />
+                        <span>Verified Resources</span>
+                      </div>
+                      <div className="space-y-2">
+                        {activeTab.result.verifiedResources.map((res, idx) => (
+                          <a 
+                            key={idx} 
+                            href={res.url} 
+                            target="_blank" 
+                            rel="noopener noreferrer"
+                            className="block p-3 bg-indigo-50 rounded-lg text-sm text-indigo-700 hover:bg-indigo-100 transition-colors font-medium"
+                          >
+                            {res.title}
+                          </a>
+                        ))}
+                      </div>
+                    </div>
+                  )}
 
                   {/* Input Code Console (when correct) */}
                   {activeTab.result?.errors.length === 0 && showConsole && (
@@ -696,13 +803,13 @@ export default function App() {
                         {isRunning ? (
                           <div className="flex items-center gap-3 text-slate-500 italic">
                             <Loader2 className="w-4 h-4 animate-spin" />
-                            <span>Executing {activeTab.result.detectedLanguage || 'code'}...</span>
+                            <span>Executing {activeTab.result?.detectedLanguage || 'code'}...</span>
                           </div>
                         ) : (
                           <div className="space-y-2">
-                            <div className="text-slate-600 text-xs">$ {activeTab.result.detectedLanguage?.toLowerCase() || 'code'} runner output:</div>
+                            <div className="text-zinc-600 text-xs">$ {activeTab.result?.detectedLanguage?.toLowerCase() || 'code'} runner output:</div>
                             <pre className="text-emerald-400 whitespace-pre-wrap leading-relaxed">
-                              {activeTab.result.expectedOutput.replace(/\\n/g, '\n') || 'Program executed successfully with no output.'}
+                              {activeTab.result?.expectedOutput?.replace(/\\n/g, '\n') || 'Program executed successfully with no output.'}
                             </pre>
                             <div className="text-emerald-600 font-bold mt-4 text-xs border-t border-slate-900 pt-2">Process finished with exit code 0</div>
                           </div>
@@ -776,7 +883,7 @@ export default function App() {
                       Run Code
                     </button>
                     <button 
-                      onClick={() => copyToClipboard(activeTab.result?.suggestedFix.replace(/\\n/g, '\n') || '', 'fix')}
+                      onClick={() => copyToClipboard(activeTab.result?.suggestedFix?.replace(/\\n/g, '\n') || '', 'fix')}
                       className="flex items-center gap-2 text-xs font-bold text-slate-500 hover:text-indigo-600 transition-colors bg-white px-3 py-1.5 rounded-lg border border-slate-200"
                     >
                       {copied ? <CheckCircle2 size={14} className="text-emerald-500" /> : <Copy size={14} />}
@@ -788,7 +895,7 @@ export default function App() {
                   <div className={`grid grid-cols-1 ${showConsole ? 'lg:grid-cols-2' : ''}`}>
                     <div className="bg-slate-900 max-h-[600px] overflow-auto">
                       <pre className="p-6 text-indigo-300 font-mono text-sm overflow-x-auto">
-                        <code>{activeTab.result.suggestedFix.replace(/\\n/g, '\n')}</code>
+                        <code>{activeTab.result?.suggestedFix?.replace(/\\n/g, '\n') || ''}</code>
                       </pre>
                     </div>
                     
@@ -812,7 +919,7 @@ export default function App() {
                             <div className="space-y-2">
                               <div className="text-slate-600 text-xs">$ {activeTab.result.detectedLanguage?.toLowerCase() || 'code'} runner output:</div>
                               <pre className="text-emerald-400 whitespace-pre-wrap leading-relaxed">
-                                {activeTab.result.expectedOutput.replace(/\\n/g, '\n') || 'Program executed successfully with no output.'}
+                                {activeTab.result?.expectedOutput?.replace(/\\n/g, '\n') || 'Program executed successfully with no output.'}
                               </pre>
                               <div className="text-emerald-600 font-bold mt-4 text-xs border-t border-slate-900 pt-2">Process finished with exit code 0</div>
                             </div>
@@ -831,7 +938,7 @@ export default function App() {
                   <span>Step-by-Step Breakdown</span>
                 </div>
                 <div className="divide-y divide-slate-100">
-                  {activeTab.result.codeBreakdown.map((item, idx) => (
+                  {activeTab.result?.codeBreakdown?.map((item, idx) => (
                     <div key={idx} className="p-6 grid grid-cols-1 md:grid-cols-12 gap-6 hover:bg-slate-50/50 transition-colors">
                       <div className="md:col-span-4">
                         <code className="text-xs font-mono bg-slate-100 p-2 rounded block text-indigo-700 border border-slate-200">
